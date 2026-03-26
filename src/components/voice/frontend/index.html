@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Streamlit Voice Component</title>
+    <!-- Native Streamlit Component Messaging -->
+    <script>
+        const Streamlit = {
+            setComponentReady: function() {
+                window.parent.postMessage({
+                    isStreamlitMessage: true,
+                    type: "streamlit:componentReady",
+                    apiVersion: 1,
+                }, "*");
+            },
+            setFrameHeight: function(height) {
+                window.parent.postMessage({
+                    isStreamlitMessage: true,
+                    type: "streamlit:setFrameHeight",
+                    height: height,
+                }, "*");
+            },
+            setComponentValue: function(value) {
+                window.parent.postMessage({
+                    isStreamlitMessage: true,
+                    type: "streamlit:setComponentValue",
+                    value: value,
+                }, "*");
+            },
+            RENDER_EVENT: "streamlit:render",
+            events: {
+                addEventListener: function(type, callback) {
+                    window.addEventListener("message", function(event) {
+                        if (event.data.type === type) {
+                            event.detail = event.data;
+                            callback(event);
+                        }
+                    });
+                }
+            }
+        };
+    </script>
+    <!-- Azure Speech SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/microsoft-cognitiveservices-speech-sdk@latest/distrib/browser/microsoft.cognitiveservices.speech.sdk.bundle-min.js"></script>
+    <style>
+        body {
+            font-family: "Source Sans Pro", sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-color: transparent;
+        }
+        #voice-btn {
+            background-color: #ff4b4b;
+            color: #ffffff;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 16px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: all 0.2s ease-in-out;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            width: 100%;
+            justify-content: center;
+        }
+        #voice-btn:hover {
+            background-color: #ff3333;
+            transform: translateY(-1px);
+        }
+        #voice-btn.listening {
+            background-color: #ffae42;
+            animation: pulse 1.5s infinite;
+        }
+        #voice-btn.speaking {
+            background-color: #4CAF50;
+        }
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(255, 174, 66, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(255, 174, 66, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(255, 174, 66, 0); }
+        }
+        #status-text {
+            font-size: 14px;
+            color: #555;
+            margin-top: 8px;
+            text-align: center;
+        }
+        .container {
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <button id="voice-btn">🎙️ Conversación en Vivo</button>
+        <div id="status-text"></div>
+    </div>
+
+    <script>
+        const btn = document.getElementById("voice-btn");
+        const statusText = document.getElementById("status-text");
+
+        let state = "idle"; // idle, listening, processing, speaking
+        let speechConfig = null;
+        let recognizer = null;
+        let synthesizer = null;
+        let lastSpokenText = "";
+        
+        let args = {}; 
+
+        function setFrameHeight() {
+            Streamlit.setFrameHeight(80);
+        }
+
+        function initAzureSpeech() {
+            if (!args.speech_key || !args.speech_region) {
+                console.error("Missing Azure Speech credentials");
+                return false;
+            }
+            if (!speechConfig) {
+                speechConfig = SpeechSDK.SpeechConfig.fromSubscription(args.speech_key, args.speech_region);
+                speechConfig.speechRecognitionLanguage = "es-MX";
+                speechConfig.speechSynthesisVoiceName = "es-MX-DaliaNeural";
+            }
+            return true;
+        }
+
+        let player = null;
+
+        btn.onclick = function() {
+            if (state === "idle") {
+                startContinuousSession(true);
+            } else {
+                stopEverything();
+            }
+        };
+
+        function stopEverything() {
+            state = "idle";
+            if (player) {
+                player.pause();
+                player.close();
+                player = null;
+            }
+            if (recognizer) {
+                recognizer.stopContinuousRecognitionAsync();
+                recognizer.close(); 
+                recognizer = null;
+            }
+            if (synthesizer) {
+                synthesizer.close(); synthesizer = null;
+            }
+            btn.classList.remove("listening", "speaking");
+            btn.innerHTML = "🎙️ Conversación en Vivo";
+            statusText.innerText = "Conversación pausada.";
+            setFrameHeight();
+
+            // Notify Streamlit that we are now inactive
+            Streamlit.setComponentValue({
+                "active": false,
+                "timestamp": Date.now()
+            });
+        }
+
+        function startContinuousSession(notifyStreamlit = false) {
+            if (!initAzureSpeech()) {
+                statusText.innerText = "Faltan credenciales de Azure.";
+                return;
+            }
+            
+            if (player) {
+                player.pause();
+                player.close();
+                player = null;
+            }
+            if (synthesizer) {
+                synthesizer.close(); synthesizer = null;
+            }
+
+            state = "listening";
+            const audioConfig = SpeechSDK.AudioConfig.fromDefaultMicrophoneInput();
+            recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
+
+            btn.classList.remove("speaking");
+            btn.classList.add("listening");
+            btn.innerHTML = "🛑 Detener Conversación";
+            statusText.innerText = "Escuchando...";
+
+            // Notify Streamlit ONLY if requested (to avoid rerun loops)
+            if (notifyStreamlit) {
+                Streamlit.setComponentValue({
+                    "active": true,
+                    "timestamp": Date.now()
+                });
+            }
+
+            recognizer.recognizing = (s, e) => {
+                if (state === "listening") {
+                    statusText.innerText = "Escuchando... " + e.result.text;
+                } else if (state === "speaking") {
+                    // INTERRUPCIÓN EN VIVO: El usuario empezó a hablar
+                    if (e.result.text && e.result.text.trim().length > 0) {
+                        console.log("Interruption detected! " + e.result.text);
+                        // CORTAR AUDIO INMEDIATAMENTE
+                        if (player) {
+                            player.pause();
+                            player.close();
+                            player = null;
+                        }
+                        if (synthesizer) { 
+                            synthesizer.close(); 
+                            synthesizer = null; 
+                        }
+                        state = "listening";
+                        btn.classList.remove("speaking");
+                        btn.classList.add("listening");
+                        btn.innerHTML = "🛑 Detener Conversación";
+                        statusText.innerText = "¡Interrumpido! Escuchando... " + e.result.text;
+                    }
+                }
+            };
+
+            recognizer.recognized = (s, e) => {
+                if (e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech) {
+                    if (state === "listening") {
+                        const finalText = e.result.text;
+                        statusText.innerText = "Reconocido: " + finalText;
+                        
+                        state = "processing";
+                        btn.classList.remove("listening");
+                        statusText.innerText = "Procesando respuesta...";
+                        
+                        // Enviar texto a Streamlit (mantenemos active: true)
+                        Streamlit.setComponentValue({
+                            "text": finalText.trim(),
+                            "active": true,
+                            "timestamp": Date.now()
+                        });
+                    }
+                }
+            };
+
+            recognizer.canceled = (s, e) => {
+                console.log("Canceled:", e.errorDetails);
+                stopEverything();
+            };
+
+            recognizer.sessionStopped = (s, e) => {
+                console.log("Session stopped.");
+                if (state !== "idle") {
+                    stopEverything();
+                }
+            };
+
+            recognizer.startContinuousRecognitionAsync();
+        }
+
+        function speakText(text) {
+            if (!text || text === lastSpokenText) return;
+            lastSpokenText = text; 
+            if (!initAzureSpeech()) return;
+
+            // DETENER COMPLETAMENTE AUDIO ANTERIOR SI ESTÁ HABLANDO
+            if (player) {
+                player.pause();
+                player.close();
+                player = null;
+            }
+            if (synthesizer) { synthesizer.close(); synthesizer = null; }
+
+            state = "speaking";
+            btn.classList.remove("listening");
+            btn.classList.add("speaking");
+            btn.innerHTML = "🛑 Detener Conversación (Hablando)";
+            statusText.innerText = "Reproduciendo respuesta...";
+
+            player = new SpeechSDK.SpeakerAudioDestination();
+            
+            player.onAudioEnd = function(s, e) {
+                // Return to listening state only when speakers physically finish playing!
+                if (state === "speaking") {
+                    state = "listening";
+                    btn.classList.remove("speaking");
+                    btn.classList.add("listening");
+                    btn.innerHTML = "🛑 Detener Conversación";
+                    statusText.innerText = "Escuchando...";
+                }
+            };
+
+            const audioConfig = SpeechSDK.AudioConfig.fromSpeakerOutput(player);
+            synthesizer = new SpeechSDK.SpeechSynthesizer(speechConfig, audioConfig);
+            
+            synthesizer.speakTextAsync(
+                text,
+                function (result) {
+                    if (synthesizer) { synthesizer.close(); synthesizer = null; }
+                    // HUI transition is now handled cleanly by player.onAudioEnd 
+                },
+                function (err) {
+                    console.error("TTS Error:", err);
+                    if (synthesizer) { synthesizer.close(); synthesizer = null; }
+                    if (state === "speaking") {
+                        state = "listening";
+                        btn.classList.remove("speaking");
+                        btn.classList.add("listening");
+                        btn.innerHTML = "🛑 Detener Conversación";
+                        statusText.innerText = "Escuchando...";
+                    }
+                }
+            );
+        }
+
+        function onRender(event) {
+            args = event.detail.args;
+
+            // AUTO-START if Streamlit says we should be active and we are currently idle
+            if (args.is_active && state === "idle") {
+                startContinuousSession();
+            }
+
+            if (args.text_to_speak && args.text_to_speak !== lastSpokenText) {
+                speakText(args.text_to_speak);
+            }
+        }
+
+        Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);
+        Streamlit.setComponentReady();
+        setFrameHeight();
+    </script>
+</body>
+</html>

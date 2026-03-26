@@ -5,7 +5,8 @@ import streamlit as st
 
 from src.agent import get_client, create_thread, send_message
 from src.citations import process_citations
-from src.config import AGENT_ID
+from src.config import AGENT_ID, SPEECH_KEY, SPEECH_REGION
+from src.components.voice import realtime_voice
 
 # ── Configuración de página ──────────────────────────────
 st.set_page_config(
@@ -24,7 +25,7 @@ with st.sidebar:
         st.warning("⚠️ Logo no encontrado. Verifica la ruta del archivo.")
         
     st.title("Sure Agent")
-    st.caption("Make **SURE** your compliance is grounded.")
+    st.caption("Asistente de análisis técnico **SURE** para reclamos bancarios. Evalúa consultas de Cuentas, Tarjetas y Préstamos fundamentándose exclusivamente en documentación contractual indexada para el equipo de cumplimiento.")
     st.divider()
     
     # 2. MEJORA: Botón primario y borrado total del estado
@@ -70,16 +71,99 @@ for msg in st.session_state.messages:
                     st.caption(f"- {fuente}")
 
 # ── Entrada del chat ─────────────────────────────────────
-if prompt := st.chat_input("Escribe tu consulta aquí…"):
-    st.session_state.messages.append({"role": "user", "content": prompt})
+
+# Determinar si hay un texto del asistente recién generado para hablar
+text_to_speak = ""
+if st.session_state.messages and st.session_state.messages[-1]["role"] == "assistant":
+    # Solo hablar si la fuente de la conversación fue por audio
+    if st.session_state.messages[-1].get("source") == "audio":
+        text_to_speak = st.session_state.messages[-1]["content"]
+
+# Inicializar estado de voz si no existe
+if "voice_active" not in st.session_state:
+    st.session_state.voice_active = False
+
+if "show_voice_ui" not in st.session_state:
+    st.session_state.show_voice_ui = False
+
+# Renderizar el componente de voz SOLO si la UI está activada
+voice_data = None
+show_voice_btn = None
+
+if st.session_state.show_voice_ui:
+    voice_data = realtime_voice(
+        speech_key=SPEECH_KEY,
+        speech_region=SPEECH_REGION,
+        text_to_speak=text_to_speak,
+        is_active=st.session_state.voice_active,
+        key="realtime_voice_component"
+    )
+    st.markdown("<br>", unsafe_allow_html=True)
+
+# Actualizar el estado de activación basado en lo que diga el componente
+if voice_data and isinstance(voice_data, dict):
+    if "active" in voice_data:
+        st.session_state.voice_active = voice_data["active"]
+
+# Extraer el prompt si vino desde voz y es uno nuevo
+voice_prompt = None
+if voice_data and isinstance(voice_data, dict) and "text" in voice_data:
+    if "last_voice_timestamp" not in st.session_state:
+        st.session_state.last_voice_timestamp = 0
+        
+    current_timestamp = voice_data.get("timestamp", 0)
+    if current_timestamp > st.session_state.last_voice_timestamp:
+        st.session_state.last_voice_timestamp = current_timestamp
+        voice_prompt = voice_data["text"]
+
+# ── Línea de entrada con Toggle de Voz ───────────────────
+# Ponemos el botón de toggle justo encima del input, alineado a la derecha
+tgl_cols = st.columns([0.92, 0.08])
+with tgl_cols[1]:
+    voice_icon = "🎙️" if st.session_state.show_voice_ui else "🔇"
+    if st.button(voice_icon, help="Mostrar/Ocultar controles de voz", key="main_voice_toggle"):
+        st.session_state.show_voice_ui = not st.session_state.show_voice_ui
+        if st.session_state.show_voice_ui:
+            st.toast("⚠️ Chat deshabilitado (Modo Voz activo). Toca 🎙️ para volver a escribir.", icon="🎙️")
+        else:
+            st.session_state.voice_active = False
+        st.rerun()
+
+# El input vuelve a su posición original (Full-width y fijado abajo)
+prompt_placeholder = "Escribe tu consulta aquí…" if not st.session_state.show_voice_ui else "Chat deshabilitado (Modo Voz activo)"
+prompt = st.chat_input(placeholder=prompt_placeholder)
+
+
+# Check if we should use the typed prompt or the spoken one
+if voice_prompt:
+    final_prompt = voice_prompt
+    prompt_source = "audio"
+elif prompt:
+    if st.session_state.show_voice_ui:
+        st.toast("⚠️ Debes deshabilitar la interfaz de voz (botón 🎙️) para enviar mensajes de texto", icon="🎙️")
+        final_prompt = None
+        prompt_source = None
+    else:
+        final_prompt = prompt
+        prompt_source = "text"
+        # Si lo escribió por chat pero menciona que lo lea, lo forzamos a hablar
+        texto_min = final_prompt.lower()
+        if any(p in texto_min for p in ["lee ", "leer", "voz", "audio", "habla", "dilo"]):
+            prompt_source = "audio"
+else:
+    final_prompt = None
+    prompt_source = None
+
+if final_prompt:
+    st.session_state.messages.append({"role": "user", "content": final_prompt, "source": prompt_source})
     with st.chat_message("user", avatar="👤"):
-        st.markdown(prompt)
+        st.markdown(final_prompt)
 
     with st.chat_message("assistant", avatar="🛡️"):
         fuentes_extraidas = [] 
         try:
             with st.spinner("Analizando documentos técnicos..."):
-                resultado = send_message(client, thread_id, AGENT_ID, prompt)
+                resultado = send_message(client, thread_id, AGENT_ID, final_prompt)
                 respuesta = process_citations(
                     resultado["value"],
                     resultado["annotations"],
@@ -95,10 +179,13 @@ if prompt := st.chat_input("Escribe tu consulta aquí…"):
                         st.caption(f"- {texto_cita}")
                         fuentes_extraidas.append(texto_cita)
 
-            # Guardar el mensaje exitoso en el historial
+            # Guardar el mensaje exitoso en el historial con su fuente
             st.session_state.messages.append(
-                {"role": "assistant", "content": respuesta, "fuentes": fuentes_extraidas}
+                {"role": "assistant", "content": respuesta, "fuentes": fuentes_extraidas, "source": prompt_source}
             )
+            
+            # Re-ejecutar para que el componente de voz lea la nueva respuesta
+            st.rerun()
 
         except Exception as exc:
             # 6. MEJORA: UI de error más amigable sin guardarlo en el historial permanente
