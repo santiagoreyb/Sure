@@ -13,10 +13,7 @@ CONNECTION_STRING: str = os.getenv(
 AGENT_ID: str = os.getenv("AZURE_AI_AGENT_ID", "asst_jxF6c8rPEyErfVcdTdjcMsvI")
 
 # Monitoreo y Tracing
-MONITOR_CONNECTION_STRING: str = os.getenv(
-    "AZURE_MONITOR_CONNECTION_STRING",
-    CONNECTION_STRING,  # Fallback a la del proyecto si no se especifica
-)
+MONITOR_CONNECTION_STRING: str = os.getenv("AZURE_MONITOR_CONNECTION_STRING", "")
 
 TENANT_ID: str = os.getenv("AZURE_TENANT_ID", "c54cdd2c-6e38-4c7c-8a3a-701741c360a9")
 

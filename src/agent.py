@@ -10,8 +10,14 @@ from src.config import CONNECTION_STRING, MONITOR_CONNECTION_STRING
 from src.governance import validate_input, validate_output
 from src.telemetry import init_telemetry
 
+import logging
+logger = logging.getLogger(__name__)
+
 # Inicializar Telemetría una sola vez al cargar el módulo con la cadena específica de Application Insights
-init_telemetry(MONITOR_CONNECTION_STRING)
+if init_telemetry(MONITOR_CONNECTION_STRING):
+    logger.info("✅ agent.py: Telemetría inicializada correctamente.")
+else:
+    logger.warning("⚠️ agent.py: Telemetría no se pudo inicializar. Verifica AZURE_MONITOR_CONNECTION_STRING.")
 
 
 @st.cache_resource(show_spinner=False)

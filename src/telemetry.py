@@ -2,6 +2,7 @@
 
 import logging
 from opentelemetry import trace
+from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from azure.monitor.opentelemetry.exporter import AzureMonitorTraceExporter
@@ -10,32 +11,43 @@ from azure.monitor.opentelemetry.exporter import AzureMonitorTraceExporter
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def init_telemetry(connection_string: str):
+def init_telemetry(connection_string: str) -> bool:
     """
     Inicializa el stack de OpenTelemetry para enviar trazas a Azure Monitor.
-    
+
     Args:
-        connection_string: Cadena de conexión de Azure AI Foundry / Application Insights.
+        connection_string: Cadena de conexión de Application Insights.
+
+    Returns:
+        bool: True si se inicializó correctamente, False en caso contrario.
     """
     if not connection_string:
-        logger.warning("⚠️ Telemetría: No se proporcionó CONNECTION_STRING. Tracing deshabilitado.")
-        return
+        logger.warning("⚠️ Telemetría: No se proporcionó AZURE_MONITOR_CONNECTION_STRING. Tracing deshabilitado.")
+        return False
+
+    if not any(k in connection_string for k in ["InstrumentationKey=", "IngestionEndpoint=", "ConnectionString="]):
+        logger.warning(
+            "⚠️ Telemetría: CONNECTION_STRING de monitorización parece incorrecta. "
+            "Debe ser la cadena de Application Insights (InstrumentationKey o ConnectionString)."
+        )
+        return False
 
     try:
-        # 1. Configurar el TracerProvider si no está configurado
-        # Nota: Azure AI SDK habilitará instrumentación automática si encuentra un TracerProvider global.
-        provider = TracerProvider()
+        resource = Resource.create({"service.name": "sure-agent"})
+        provider = TracerProvider(resource=resource)
         trace.set_tracer_provider(provider)
 
-        # 2. Configurar el exportador de Azure Monitor
-        # Esto enviará las trazas (incluyendo las del SDK de Azure AI) a Application Insights.
         exporter = AzureMonitorTraceExporter.from_connection_string(connection_string)
         span_processor = BatchSpanProcessor(exporter)
         provider.add_span_processor(span_processor)
 
         logger.info("🚀 Telemetría: Tracing habilitado hacia Azure Monitor.")
+        return True
+
     except Exception as e:
         logger.error(f"❌ Telemetría: Error al inicializar el exportador: {e}")
+        return False
+
 
 def get_tracer(name: str):
     """Obtiene un tracer para instrumentación manual si es necesario."""
