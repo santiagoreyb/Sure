@@ -58,6 +58,9 @@ with st.sidebar:
                         st.session_state.show_history = False
                     st.rerun()
 
+    st.divider()
+    st.caption("🛡️ **Declaración de IA**: SURE es una inteligencia artificial y puede cometer errores. Verifica siempre la información importante.")
+
 # ── Cliente e hilo de conversación ───────────────────────
 client = get_client()
 
@@ -230,3 +233,11 @@ if final_prompt:
             st.error("Ocurrió un error al procesar la solicitud.")
             with st.expander("Detalles del error técnico"):
                 st.code(exc, language="python")
+
+# ── Pie de página general ────────────────────────────────
+st.markdown(
+    "<br><div style='text-align: center; color: grey; font-size: 0.8rem;'>"
+    "SURE es una inteligencia artificial y puede cometer errores. Verifica la información importante."
+    "</div>",
+    unsafe_allow_html=True
+)
