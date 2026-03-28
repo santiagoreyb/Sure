@@ -11,12 +11,6 @@ from src.components.voice import realtime_voice
 from src.history import save_thread, load_history
 from src.pii import mask_pii
 
-import logging
-logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
-
-# Log de diagnóstico para Azure
-print(">>> SURE AGENT: VERIFICANDO INICIO DE APLICACION EN PUERTO 8080 <<<", flush=True)
-
 # ── Configuración de página ──────────────────────────────
 st.set_page_config(
     page_title="Sure Agent",
